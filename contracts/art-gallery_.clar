@@ -64,4 +64,108 @@
   (/ (* price (var-get platform-fee)) u1000)
 )
 
-;
+;; Public functions
+(define-public (create-artwork (title (string-utf8 100)) (description (string-utf8 500)) (price uint))
+  (let
+    ((artwork-id (var-get next-artwork-id)))
+    (map-set artworks
+      { artwork-id: artwork-id }
+      {
+        artist: tx-sender,
+        title: title,
+        description: description,
+        price: price,
+        owner: tx-sender,
+        for-sale: true
+      }
+    )
+    (var-set next-artwork-id (+ artwork-id u1))
+    (ok artwork-id)
+  )
+)
+
+(define-public (update-artwork-price (artwork-id uint) (new-price uint))
+  (let
+    ((artwork (unwrap! (map-get? artworks { artwork-id: artwork-id }) (err err-not-found))))
+    (asserts! (is-eq (get owner artwork) tx-sender) (err err-unauthorized))
+    (asserts! (> new-price u0) (err err-invalid-price))
+    (ok (map-set artworks
+      { artwork-id: artwork-id }
+      (merge artwork { price: new-price, for-sale: true })))
+  )
+)
+
+(define-public (buy-artwork (artwork-id uint))
+  (let
+    ((artwork (unwrap! (map-get? artworks { artwork-id: artwork-id }) (err err-not-found)))
+     (buyer tx-sender)
+     (seller (get owner artwork))
+     (price (get price artwork))
+     (fee (calculate-platform-fee price)))
+    (asserts! (not (is-eq buyer seller)) (err err-unauthorized))
+    (asserts! (get for-sale artwork) (err err-not-for-sale))
+    (match (stx-transfer? price buyer seller)
+      success (match (stx-transfer? fee buyer contract-owner)
+                fee-success (transfer-artwork artwork-id buyer)
+                fee-error (err err-transfer-failed))
+      error (err err-insufficient-funds))
+  )
+)
+
+(define-public (create-exhibition (title (string-utf8 100)) (description (string-utf8 500)) (artwork-ids (list 50 uint)) (duration uint))
+  (let
+    ((exhibition-id (var-get next-exhibition-id))
+     (start-block block-height)
+     (end-block (+ block-height duration)))
+    (map-set exhibitions
+      { exhibition-id: exhibition-id }
+      {
+        curator: tx-sender,
+        title: title,
+        description: description,
+        artwork-ids: artwork-ids,
+        start-block: start-block,
+        end-block: end-block
+      }
+    )
+    (var-set next-exhibition-id (+ exhibition-id u1))
+    (ok exhibition-id)
+  )
+)
+
+(define-public (approve-exhibition-rights (artwork-id uint) (exhibition-id uint))
+  (let
+    ((artwork (unwrap! (map-get? artworks { artwork-id: artwork-id }) (err err-not-found))))
+    (asserts! (is-eq (get owner artwork) tx-sender) (err err-unauthorized))
+    (ok (map-set exhibition-rights
+      { artwork-id: artwork-id, exhibition-id: exhibition-id }
+      { approved: true }))
+  )
+)
+
+(define-public (set-platform-fee (new-fee uint))
+  (begin
+    (asserts! (is-owner) (err err-owner-only))
+    (asserts! (<= new-fee u1000) (err err-invalid-price))
+    (ok (var-set platform-fee new-fee))
+  )
+)
+
+;; Read-only functions
+(define-read-only (get-artwork (artwork-id uint))
+  (ok (map-get? artworks { artwork-id: artwork-id }))
+)
+
+(define-read-only (get-exhibition (exhibition-id uint))
+  (ok (map-get? exhibitions { exhibition-id: exhibition-id }))
+)
+
+(define-read-only (get-exhibition-rights (artwork-id uint) (exhibition-id uint))
+  (ok (default-to { approved: false }
+    (map-get? exhibition-rights { artwork-id: artwork-id, exhibition-id: exhibition-id })))
+)
+
+(define-read-only (get-platform-fee)
+  (ok (var-get platform-fee))
+)
+
